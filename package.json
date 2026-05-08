@@ -1,0 +1,42 @@
+{
+  "name": "portainer-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Portainer REST API — manage Docker containers, stacks, images, networks and volumes via AI assistants",
+  "type": "module",
+  "main": "src/index.mjs",
+  "bin": {
+    "portainer-mcp-server": "./src/index.mjs"
+  },
+  "scripts": {
+    "start": "node src/index.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "portainer",
+    "docker",
+    "containers",
+    "stacks",
+    "devops",
+    "ai",
+    "claude",
+    "opencode"
+  ],
+  "author": "hlavrencic",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.22.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hlavrencic/portainer-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hlavrencic/portainer-mcp-server/issues"
+  },
+  "homepage": "https://github.com/hlavrencic/portainer-mcp-server#readme"
+}
