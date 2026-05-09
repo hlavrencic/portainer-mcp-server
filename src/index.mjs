@@ -211,13 +211,21 @@ server.tool(
       const newContainerId = createResp.Id;
       
       // Step 6: Start the new container
-      await api(`/endpoints/${environmentId}/docker/containers/${newContainerId}/start`, { method: "POST" });
+      try {
+        await api(`/endpoints/${environmentId}/docker/containers/${newContainerId}/start`, { method: "POST" });
+      } catch (startError) {
+        return { content: [{ type: "text", text: `Error starting container: ${startError.message}` }] };
+      }
+      
+      // Step 7: Get the image hash from the running container
+      const runningContainer = await api(`/endpoints/${environmentId}/docker/containers/${newContainerId}/json`);
+      const imageHash = runningContainer.Image;
       
       return {
         content: [
           {
             type: "text",
-            text: `Container recreated successfully!\nOld image: ${oldImageId}\nNew image: ${image}\nNew container ID: ${newContainerId.slice(0, 12)}`,
+            text: `Container recreated successfully!\nOld image: ${oldImageId}\nNew image: ${image}\nNew container ID: ${newContainerId.slice(0, 12)}\nImage hash: ${imageHash}`,
           },
         ],
       };
