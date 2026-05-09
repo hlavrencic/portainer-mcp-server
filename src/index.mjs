@@ -123,6 +123,110 @@ server.tool(
   }
 );
 
+server.tool(
+  "pull_image",
+  "Pull a Docker image from a registry",
+  {
+    environmentId: z.number().describe("Portainer environment ID"),
+    image: z.string().describe("Image name (e.g., 'nginx:latest' or 'myregistry.com/myimage:v1.0')"),
+  },
+  async ({ environmentId, image }) => {
+    const params = new URLSearchParams({ fromImage: image });
+    await api(`/endpoints/${environmentId}/docker/images/create?${params}`, { method: "POST" });
+    return { content: [{ type: "text", text: `Image ${image} pulled successfully` }] };
+  }
+);
+
+server.tool(
+  "delete_image",
+  "Delete a Docker image",
+  {
+    environmentId: z.number().describe("Portainer environment ID"),
+    imageId: z.string().describe("Image ID or name (e.g., 'sha256:abc123' or 'nginx:latest')"),
+    force: z.boolean().optional().describe("Force delete even if image is in use (default: false)"),
+  },
+  async ({ environmentId, imageId, force = false }) => {
+    const params = new URLSearchParams({ force: String(force) });
+    await api(`/endpoints/${environmentId}/docker/images/${imageId}?${params}`, { method: "DELETE" });
+    return { content: [{ type: "text", text: `Image ${imageId} deleted successfully` }] };
+  }
+);
+
+server.tool(
+  "recreate_container",
+  "Recreate a container with an updated image (stops old container, pulls new image, starts new container)",
+  {
+    environmentId: z.number().describe("Portainer environment ID"),
+    containerId: z.string().describe("Container ID or name"),
+    image: z.string().describe("New image to use (e.g., 'nginx:latest')"),
+  },
+  async ({ environmentId, containerId, image }) => {
+    try {
+      // Step 1: Get the current container configuration
+      const container = await api(`/endpoints/${environmentId}/docker/containers/${containerId}/json`);
+      const oldImageId = container.Image;
+      
+      // Step 2: Stop the container
+      await api(`/endpoints/${environmentId}/docker/containers/${containerId}/stop`, { method: "POST" });
+      
+      // Step 3: Pull the new image
+      const params = new URLSearchParams({ fromImage: image });
+      await api(`/endpoints/${environmentId}/docker/images/create?${params}`, { method: "POST" });
+      
+      // Step 4: Remove the old container
+      await api(`/endpoints/${environmentId}/docker/containers/${containerId}?force=true`, { method: "DELETE" });
+      
+      // Step 5: Create and start new container with same configuration
+      const createConfig = {
+        Image: image,
+        Hostname: container.Config.Hostname,
+        Domainname: container.Config.Domainname,
+        User: container.Config.User,
+        AttachStdin: container.Config.AttachStdin,
+        AttachStdout: container.Config.AttachStdout,
+        AttachStderr: container.Config.AttachStderr,
+        Tty: container.Config.Tty,
+        OpenStdin: container.Config.OpenStdin,
+        StdinOnce: container.Config.StdinOnce,
+        Env: container.Config.Env,
+        Cmd: container.Config.Cmd,
+        Entrypoint: container.Config.Entrypoint,
+        Labels: container.Config.Labels,
+        Volumes: container.Config.Volumes,
+        WorkingDir: container.Config.WorkingDir,
+        NetworkMode: container.HostConfig.NetworkMode,
+        Ports: container.HostConfig.PortBindings,
+        CapAdd: container.HostConfig.CapAdd,
+        CapDrop: container.HostConfig.CapDrop,
+        RestartPolicy: container.HostConfig.RestartPolicy,
+        VolumesFrom: container.HostConfig.VolumesFrom,
+        Mounts: container.Mounts,
+      };
+      
+      const createResp = await api(`/endpoints/${environmentId}/docker/containers/create?name=${container.Name.replace(/^\//, '')}`, {
+        method: "POST",
+        body: JSON.stringify(createConfig),
+      });
+      
+      const newContainerId = createResp.Id;
+      
+      // Step 6: Start the new container
+      await api(`/endpoints/${environmentId}/docker/containers/${newContainerId}/start`, { method: "POST" });
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Container recreated successfully!\nOld image: ${oldImageId}\nNew image: ${image}\nNew container ID: ${newContainerId.slice(0, 12)}`,
+          },
+        ],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error recreating container: ${error.message}` }] };
+    }
+  }
+);
+
 // ── Stacks ────────────────────────────────────────────────────────────────────
 
 server.tool("list_stacks", "List all stacks in Portainer", {}, async () => {
