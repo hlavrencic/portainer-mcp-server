@@ -169,14 +169,10 @@ server.tool(
       // Step 2: Stop the container
       await api(`/endpoints/${environmentId}/docker/containers/${containerId}/stop`, { method: "POST" });
       
-      // Step 3: Pull the new image
-      const params = new URLSearchParams({ fromImage: image });
-      await api(`/endpoints/${environmentId}/docker/images/create?${params}`, { method: "POST" });
-      
-      // Step 4: Remove the old container
+      // Step 3: Remove the old container
       await api(`/endpoints/${environmentId}/docker/containers/${containerId}?force=true`, { method: "DELETE" });
       
-      // Step 5: Create and start new container with same configuration
+      // Step 4: Create new container with same configuration
       const createConfig = {
         Image: image,
         Hostname: container.Config.Hostname,
@@ -209,6 +205,10 @@ server.tool(
       });
       
       const newContainerId = createResp.Id;
+      
+      // Step 5: Pull the new image before starting the container
+      const params = new URLSearchParams({ fromImage: image });
+      await api(`/endpoints/${environmentId}/docker/images/create?${params}`, { method: "POST" });
       
       // Step 6: Start the new container
       try {
