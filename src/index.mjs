@@ -452,6 +452,114 @@ server.tool(
   }
 );
 
+// ── Image Management (Unused Images) ──────────────────────────────────────────
+
+server.tool(
+  "portainer_list_unused_images",
+  "List Docker images not used by any container (dangling images)",
+  { environmentId: z.number().describe("Portainer environment ID") },
+  async ({ environmentId }) => {
+    try {
+      const [containers, allImages] = await Promise.all([
+        api(`/endpoints/${environmentId}/docker/containers/json?all=1`),
+        api(`/endpoints/${environmentId}/docker/images/json?all=1`)
+      ]);
+
+      // Get all image IDs used by containers
+      const usedImageIds = new Set();
+      containers.forEach((container) => {
+        if (container.ImageID) {
+          usedImageIds.add(container.ImageID);
+        }
+      });
+
+      // Filter images that are not used by any container and have no tags
+      const unusedImages = allImages.filter((img) => {
+        const isUsed = usedImageIds.has(img.Id);
+        const hasRepoTags = img.RepoTags && img.RepoTags.length > 0 && !img.RepoTags.includes("<none>");
+        return !isUsed && (!hasRepoTags || img.RepoTags.every(tag => tag === "<none>"));
+      });
+
+      const text = unusedImages.map((img) =>
+        `ID: ${img.Id.slice(7, 19)} | Tags: ${(img.RepoTags || ["<none>"]).join(", ")} | Size: ${(img.Size / 1024 / 1024).toFixed(1)}MB | Dangling: ${!img.RepoTags || img.RepoTags.every(tag => tag === "<none>")}`
+      ).join("\n");
+
+      return { content: [{ type: "text", text: text || "No unused images found" }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error listing unused images: ${error.message}` }] };
+    }
+  }
+);
+
+server.tool(
+  "portainer_cleanup_unused_images",
+  "Delete all unused Docker images with optional force flag",
+  {
+    environmentId: z.number().describe("Portainer environment ID"),
+    force: z.boolean().optional().describe("Force delete even if image is in use (default: false)"),
+  },
+  async ({ environmentId, force = false }) => {
+    try {
+      const [containers, allImages] = await Promise.all([
+        api(`/endpoints/${environmentId}/docker/containers/json?all=1`),
+        api(`/endpoints/${environmentId}/docker/images/json?all=1`)
+      ]);
+
+      // Get all image IDs used by containers
+      const usedImageIds = new Set();
+      containers.forEach((container) => {
+        if (container.ImageID) {
+          usedImageIds.add(container.ImageID);
+        }
+      });
+
+      // Filter images that are not used by any container and have no tags
+      const unusedImages = allImages.filter((img) => {
+        const isUsed = usedImageIds.has(img.Id);
+        const hasRepoTags = img.RepoTags && img.RepoTags.length > 0 && !img.RepoTags.includes("<none>");
+        return !isUsed && (!hasRepoTags || img.RepoTags.every(tag => tag === "<none>"));
+      });
+
+      if (unusedImages.length === 0) {
+        return { content: [{ type: "text", text: "No unused images found to delete" }] };
+      }
+
+      const deleted = [];
+      const failed = [];
+
+      for (const img of unusedImages) {
+        try {
+          const imageId = img.Id;
+          const params = new URLSearchParams({ force: String(force) });
+          await api(`/endpoints/${environmentId}/docker/images/${imageId}?${params}`, { method: "DELETE" });
+          deleted.push({
+            id: img.Id.slice(7, 19),
+            tags: img.RepoTags || ["<none>"],
+            size: `${(img.Size / 1024 / 1024).toFixed(1)}MB`,
+          });
+        } catch (error) {
+          failed.push({
+            id: img.Id.slice(7, 19),
+            error: error.message,
+          });
+        }
+      }
+
+      let resultText = `Cleanup completed. Deleted ${deleted.length} image(s)`;
+      if (deleted.length > 0) {
+        resultText += ":\n" + deleted.map(img => `  - ${img.tags.join(", ")} (${img.size})`).join("\n");
+      }
+      if (failed.length > 0) {
+        resultText += `\n\nFailed to delete ${failed.length} image(s):\n` + failed.map(img => `  - ${img.id}: ${img.error}`).join("\n");
+      }
+
+      return { content: [{ type: "text", text: resultText }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error cleaning up images: ${error.message}` }] };
+    }
+  }
+);
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 const transport = new StdioServerTransport();
