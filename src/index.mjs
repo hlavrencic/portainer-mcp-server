@@ -7,6 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import express from "express";
 
 const PORTAINER_URL = process.env.PORTAINER_URL || "http://192.168.0.214:9000";
 const PORTAINER_PAT = process.env.PORTAINER_PAT;
@@ -36,6 +37,145 @@ async function api(path, options = {}) {
     return text;
   }
 }
+
+// ── Express Server for Public Endpoints ──────────────────────────────────────
+const app = express();
+app.use(express.json());
+
+const PORT = process.env.PUBLIC_PORT || 3000;
+
+// Helper function to identify unused images (dangling images not used by any container)
+async function getUnusedImages(environmentId) {
+  try {
+    const [containers, allImages] = await Promise.all([
+      api(`/endpoints/${environmentId}/docker/containers/json?all=1`),
+      api(`/endpoints/${environmentId}/docker/images/json?all=1`)
+    ]);
+
+    // Get all image IDs used by containers
+    const usedImageIds = new Set();
+    containers.forEach((container) => {
+      if (container.ImageID) {
+        usedImageIds.add(container.ImageID);
+      }
+    });
+
+    // Filter images that are not used by any container and have no tags
+    const unusedImages = allImages.filter((img) => {
+      const isUsed = usedImageIds.has(img.Id);
+      const hasRepoTags = img.RepoTags && img.RepoTags.length > 0 && !img.RepoTags.includes("<none>");
+      // Mark as unused if: not used by container AND (dangling or has no meaningful tags)
+      return !isUsed && (!hasRepoTags || img.RepoTags.every(tag => tag === "<none>"));
+    });
+
+    return unusedImages;
+  } catch (error) {
+    throw new Error(`Failed to get unused images: ${error.message}`);
+  }
+}
+
+// GET /api/images - List all Docker images (public endpoint)
+app.get("/api/images", async (req, res) => {
+  try {
+    const environmentId = req.query.environmentId || 1;
+    const images = await api(`/endpoints/${environmentId}/docker/images/json`);
+    
+    res.json({
+      success: true,
+      count: images.length,
+      images: images.map((img) => ({
+        id: img.Id.slice(7, 19),
+        tags: img.RepoTags || ["<none>"],
+        size: `${(img.Size / 1024 / 1024).toFixed(1)}MB`,
+        created: img.Created,
+        repoDigests: img.RepoDigests,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// GET /api/images/unused - List unused Docker images (public endpoint)
+app.get("/api/images/unused", async (req, res) => {
+  try {
+    const environmentId = req.query.environmentId || 1;
+    const unusedImages = await getUnusedImages(environmentId);
+    
+    res.json({
+      success: true,
+      count: unusedImages.length,
+      unusedImages: unusedImages.map((img) => ({
+        id: img.Id.slice(7, 19),
+        fullId: img.Id,
+        tags: img.RepoTags || ["<none>"],
+        size: `${(img.Size / 1024 / 1024).toFixed(1)}MB`,
+        created: img.Created,
+        dangling: !img.RepoTags || img.RepoTags.every(tag => tag === "<none>"),
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// POST /api/images/cleanup - Delete unused Docker images (public endpoint)
+app.post("/api/images/cleanup", async (req, res) => {
+  try {
+    const environmentId = req.query.environmentId || 1;
+    const force = req.query.force === "true";
+    
+    const unusedImages = await getUnusedImages(environmentId);
+    
+    if (unusedImages.length === 0) {
+      return res.json({
+        success: true,
+        message: "No unused images found",
+        deletedCount: 0,
+        deleted: [],
+      });
+    }
+
+    const deleted = [];
+    const failed = [];
+
+    for (const img of unusedImages) {
+      try {
+        const imageId = img.Id;
+        const params = new URLSearchParams({ force: String(force) });
+        await api(`/endpoints/${environmentId}/docker/images/${imageId}?${params}`, { method: "DELETE" });
+        deleted.push({
+          id: img.Id.slice(7, 19),
+          tags: img.RepoTags || ["<none>"],
+          size: `${(img.Size / 1024 / 1024).toFixed(1)}MB`,
+        });
+      } catch (error) {
+        failed.push({
+          id: img.Id.slice(7, 19),
+          error: error.message,
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Cleanup completed. Deleted ${deleted.length} image(s).`,
+      deletedCount: deleted.length,
+      failedCount: failed.length,
+      deleted,
+      failed: failed.length > 0 ? failed : undefined,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Start Express server
+app.listen(PORT, () => {
+  console.log(`Public API server running on http://localhost:${PORT}`);
+});
+
+// ── MCP Server ────────────────────────────────────────────────────────────────
 
 const server = new McpServer({
   name: "portainer",
